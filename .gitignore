@@ -18,6 +18,10 @@ GitHub_Build/
 build/
 dist/
 *.spec.bak
+scripts/*.spec
+
+# --- 本地开发工具(不进仓库) ---
+scripts/tools/
 
 # --- IDE / 系统 ---
 .vscode/

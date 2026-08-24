@@ -166,9 +166,9 @@ means the map was updated — normal, covered by the fallback chain.
 `server/launcher.py`: port 4680+19 fallback, uvicorn thread, pywebview
 (WebView2) window, `js_api.pick_bsor()` system file dialog bridge, double-click
 .bsor argv navigation, stop server on window close.
-Automated verification (`scripts/tools/webview_test.py`): window renders the
-launcher UI ✅; `<input type=file>` opens the native Windows file dialog
-(filter `*.dat;*.bsor;*.json`) ✅; navigation to replayUrl renders the full map
+Automated verification (local dev tooling): window renders the launcher UI ✅;
+`<input type=file>` opens the native Windows file dialog (filter
+`*.dat;*.bsor;*.json`) ✅; navigation to replayUrl renders the full map
 preview (song card/HUD/timeline) ✅.
 
 ### P4 Local-first (✅)
