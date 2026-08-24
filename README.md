@@ -1,3 +1,7 @@
+<p>
+<a href="README.zh.md">中文</a> · <a href="README.md">English</a>
+</p>
+
 # Local-ChroViewer
 
 A local-first Beat Saber map & replay viewer — a standalone desktop port of
