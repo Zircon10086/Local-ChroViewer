@@ -1,3 +1,11 @@
+<div align="center">
+
+<p>
+<a href="README.zh.md">中文</a> · <a href="README.md">English</a>
+</p>
+
+<div align="left">
+
 # Local-ChroViewer
 
 Beat Saber 谱面/回放本地查看器 —— [ChroViewer](https://github.com/Umbranoxio/chroviewer) 的本地移植版,以原生 webview 窗口(pywebview / WebView2)+ Python(FastAPI)后端独立运行。
