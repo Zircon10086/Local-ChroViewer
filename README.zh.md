@@ -10,9 +10,13 @@
 
 Beat Saber 谱面/回放本地查看器 —— [ChroViewer](https://github.com/Umbranoxio/chroviewer) 的本地移植版,以原生 webview 窗口(pywebview / WebView2)+ Python(FastAPI)后端独立运行。
 
-**本地优先,云端兜底**:选择本地 `.bsor` 回放 → 自动在本地游戏目录
+**本地优先,云端备用**:选择本地 `.bsor` 回放 → 自动在本地游戏目录
 (`Beat Saber_Data\CustomLevels`)匹配谱面 → 全程无网络;只有本地没有(或版本过期)
 才从 BeatSaver 下载,存入项目自己的缓存区,下载期间显示实时进度环。
+
+<p>
+<img src="Screenshot.png" alt="Local ChroViewer" width="1080">
+</p>
 
 ## 功能
 
