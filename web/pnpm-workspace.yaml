@@ -1,0 +1,15 @@
+allowBuilds:
+  '@bufbuild/buf': true
+catalog:
+  vite: npm:@voidzero-dev/vite-plus-core@0.2.8
+  vite-plus: 0.2.8
+overrides:
+  vite: 'catalog:'
+patchedDependencies:
+  '@tanstack/react-router@1.170.18': patches/@tanstack%2Freact-router@1.170.18.patch
+  better-result@2.8.2: patches/better-result@2.8.2.patch
+peerDependencyRules:
+  allowAny:
+    - vite
+  allowedVersions:
+    vite: '*'

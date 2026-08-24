@@ -1,0 +1,16 @@
+# dependencies
+node_modules
+
+# Vite+ generated hook dispatcher
+.vite-hooks/_
+
+# output
+.output
+
+# dotenv environment variable files
+.env*
+!.env.example*
+
+# caches
+.tanstack/
+*.tsbuildinfo

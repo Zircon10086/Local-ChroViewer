@@ -1,0 +1,13 @@
+*
+!package.json
+!pnpm-lock.yaml
+!pnpm-workspace.yaml
+!.node-version
+!public/**
+!src/**
+!tsconfig.json
+!vite.config.ts
+!patches/**
+src/app/assets/*.ai
+src/modules/live/proto/**
+src/sources/*/openapi.json
