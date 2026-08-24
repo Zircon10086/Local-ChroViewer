@@ -1,202 +1,297 @@
-# Local-ChroViewer 本地版设计报告(基于 SaberLab 实践验证)
+# Local-ChroViewer: Design Report (validated against SaberLab practice)
 
-> 日期:2026-08-24
-> 输入:① SaberLab 项目代码逐项核实 ② 官方 ChroViewer 代码(Phase 1 已验证)
-> 目标:exe 双击启动(无控制台窗口)→ 自动弹出本地 webview 窗口;本地 .bsor 直读、按 hash 反推本地谱面、绕过网络
+> Date: 2026-08-24
+> Inputs: ① SaberLab project code, verified item by item ② upstream ChroViewer
+> code (Phase 1 verified)
+> Goal: double-click an exe (no console window) → a local webview window pops
+> up; read local `.bsor` replays, resolve the map by hash locally, bypass the
+> network.
 
 ---
 
-## 一、SaberLab 实践可信度验证(全部通过)
+## 1. SaberLab practice validation (all passed)
 
-参考的 SaberLab 资产逐项实际读取核实,结论:**内容与真实代码完全一致,可直接作为实施蓝本**:
+Every SaberLab asset referenced below was actually read and verified — the
+practices match the real code and can be used as an implementation blueprint:
 
-| 引用资产 | 验证结果 |
+| Asset | Verified result |
 |---|---|
-| `backend/bsor/parser.py` + `models.py` | ✅ 存在。BSOR v1 二进制解析器,严格对齐官方 C# ReplayDecoder(魔数 0x442D3D69、7 种节类型、playerName UTF-16 长度前缀官方 bug 修复) |
-| `backend/maps/resolver.py` | ✅ 存在。`compute_level_hash()` = SongCore 算法;**SHA1(info.dat 字节 + 按 `_difficultyBeatmapSets` 顺序的各难度 .dat 字节) → 大写 HEX**;`load_songcore_cache()` 读游戏自产 `UserData/SongCore/SongHashData.dat` |
-| `backend/main.py` 两个端点 | ✅ 存在且契约一致:`/api/replays/{id}/raw`(FileResponse 原样透传字节)+ `/api/maps/{hash}/package`(**ZIP_STORED 不压缩** + 一次性 `Response(bytes)` + 500MB 上限 413) |
-| `backend/host.py` | ✅ 存在。端口探测、uvicorn 线程 + 就绪轮询、窗口失败回退、重启子进程、PyInstaller 用 `app` 对象而非 import string |
-| `packaging/saberlab.spec` | ✅ 存在。PyInstaller onedir;`console=False`(windowed,不弹命令行);`Tree()` 打包前端目录 |
+| `backend/bsor/parser.py` + `models.py` | ✅ BSOR v1 binary parser, strictly aligned with the official C# ReplayDecoder (magic 0x442D3D69, 7 section types, official playerName UTF-16 length-prefix bug repair) |
+| `backend/maps/resolver.py` | ✅ `compute_level_hash()` = SongCore algorithm; **SHA1(info.dat bytes + each difficulty .dat in `_difficultyBeatmapSets` order) → uppercase HEX**; `load_songcore_cache()` reads the game's own `UserData/SongCore/SongHashData.dat` |
+| `backend/main.py` endpoints | ✅ contract matches: `/api/replays/{id}/raw` (FileResponse, raw bytes) + `/api/maps/{hash}/package` (**ZIP_STORED** + one-shot `Response(bytes)` + 500 MB cap → 413) |
+| `backend/host.py` | ✅ port probing, uvicorn thread + readiness polling, window failure fallback, restart child process, PyInstaller passes the `app` object (not an import string) |
+| `packaging/saberlab.spec` | ✅ PyInstaller onedir; `console=False` (windowed); `Tree()` for frontend assets |
 
 ---
 
-## 二、从 SaberLab 提取的关键技术信息
+## 2. Key techniques extracted from SaberLab
 
-### 2.1 谱面反推链路(核心)
+### 2.1 Local map resolution (the core)
 
 ```
-BSOR info.songHash → 本地谱面库匹配 → 谱面包(zip)→ 前端既有解包/解析管线
+BSOR info.songHash → local map library match → map package (zip)
+→ existing frontend unpack/parse pipeline
 ```
 
-- **hash 口径(最重要)**:BeatLeader replay 的 `songHash` 就是 SongCore 谱面 hash(SHA1(info.dat + 按难度集顺序的各难度文件字节))。SaberLab `compute_level_hash()` 是现成实现,源自 SongCore(MIT)
-- **三层匹配策略**:① `SongHashData.dat` 缓存(游戏生成,秒解)② 全量扫描 CustomLevels 逐文件夹算 hash(mtime 跳过未变项)③ 未命中 → 前端回退网络或手动选择
-- **防坑经验**:全量扫描加锁、负缓存、mtime 复用
+- **Hash semantics (most important)**: BeatLeader's `songHash` is the SongCore
+  level hash (SHA1 of info.dat + difficulty files in set order). SaberLab's
+  `compute_level_hash()` is a ready-made implementation (from SongCore, MIT).
+- **Three-tier matching**: ① `SongHashData.dat` cache (game-generated,
+  instant) ② full `CustomLevels` scan with hash computation (mtime-skipped)
+  ③ miss → network fallback or manual selection
+- **Pitfalls learned**: scan lock, negative cache, mtime reuse
 
-### 2.2 BSOR 数据链路
+### 2.2 BSOR data channel
 
-- 后端**只透传字节**,解析全在前端(官方 `?replayUrl=` 契约,前端已有 LZMA 解压 / BeatLeader 格式处理)
-- `replayUrl` 必须整体 `encodeURIComponent`(URL 内含 `?`/`&`)
-- 会话级文件表(id → 磁盘路径)承接"双击打开"
+- Backend **passes bytes through only**; parsing is entirely frontend (upstream
+  `?replayUrl=` contract; LZMA / BeatLeader formats already handled)
+- `replayUrl` must be fully `encodeURIComponent`d (URLs contain `?`/`&`)
+- Session file table (id → disk path) supports double-click opening
 
-### 2.3 三个实证坑(务必照抄)
+### 2.3 Three practical pitfalls (copy these)
 
-1. **ZIP_STORED**:谱面含已压缩音频/图片 + 加密 `.egg`,DEFLATE 慢且无收益
-2. **一次性 Response 而非 StreamingResponse**:同步 BytesIO 按 `\n` 迭代,14MB zip 拆成十几万 chunk
-3. **windowed 打包 stdio**:`console=False` 下 stdout/stderr 为 None,必须重定向(否则 uvicorn 日志配置崩溃)
+1. **ZIP_STORED**: maps contain already-compressed audio/images + encrypted
+   `.egg`; DEFLATE is slow and pointless, and can hang the request
+2. **One-shot Response, not StreamingResponse**: a sync BytesIO iterates by
+   `\n`, splitting a 14 MB zip into 100k+ chunks
+3. **Windowed stdio**: with `console=False`, stdout/stderr are None and must be
+   redirected (otherwise uvicorn's logging config crashes)
 
-### 2.4 启动器模式(host.py)
+### 2.4 Launcher pattern (host.py)
 
-端口探测(4680 起 +19)→ uvicorn 线程 → 就绪轮询 → 本地窗口 → 退出清理;PyInstaller 下 uvicorn 必须传 `app` 对象(import string 在 frozen 环境不可见)
+Port probing (4680+19) → uvicorn thread → readiness polling → local window →
+cleanup on exit; under PyInstaller, uvicorn must get the `app` object (import
+strings are invisible in frozen environments)
 
 ---
 
-## 三、技术选型(最终)
+## 3. Technology choices (final)
 
-| 决策点 | 选型 | 理由 |
+| Decision | Choice | Rationale |
 |---|---|---|
-| 后端框架 | **FastAPI + uvicorn**(与 SaberLab 一致) | FileResponse/Response 现成、生态成熟 |
-| BSOR 处理 | **后端只提取 songHash(轻量读取),完整解析留前端** | 前端已具备完整解析;后端只需 hash 做反推 |
-| 谱面库索引 | **JSON 文件缓存 + SongHashData.dat 优先** | 只需 hash→路径映射,mtime 判断,无迁移成本 |
-| 窗口 | **pywebview(WebView2)本地窗口,唯一运行方式** | 原生窗口外观、系统级文件对话框、WebGL2 已实测可用 |
-| 双击 .bsor | exe 接收 `argv[1]` → `POST /api/local/open` → 窗口自动导航 | 已验证 |
-| 打包 | **PyInstaller onedir + `console=False`** | windowed = 无命令行窗口;输出单 exe + Release zip |
-| 单实例/端口 | 端口探测(4680+19 顺延) | 已验证 |
-| 前端本地源 | **`resolveLocalFirst` 一处实现 + 本地 provider** | 改动面最小 |
+| Backend | **FastAPI + uvicorn** (same as SaberLab) | FileResponse/Response ready-made, mature ecosystem |
+| BSOR handling | **backend extracts only songHash (lightweight); full parse stays frontend** | frontend already parses; backend only needs the hash for resolution |
+| Map library index | **JSON file cache + SongHashData.dat priority** | only needs hash→path mapping with mtime checks; no migration cost |
+| Window | **pywebview (WebView2) local window — the only runtime** | native window, system file dialogs, WebGL2 verified |
+| Double-click .bsor | exe accepts `argv[1]` → `POST /api/local/open` → window navigates | verified |
+| Packaging | **PyInstaller onedir + `console=False`** | windowed = no console; single exe + release zip |
+| Single instance / port | port probing (4680, fallback +19) | verified |
+| Frontend local source | **`resolveLocalFirst` + local provider** | minimal change surface |
 
 ---
 
-## 四、目标架构(与实施产物一致)
+## 4. Target architecture (matches the shipped product)
 
 ```
 Local-ChroViewer.exe  (PyInstaller windowed, console=False)
 │
-├─ launcher.py  ── 端口探测(4680 起,占用顺延) → uvicorn 线程 → 就绪轮询
-│                  → pywebview(WebView2)本地窗口(1280x800)
-│                  → argv[1]=.bsor 时 POST /api/local/open → 窗口导航回放
-│                  → 关窗 → 停服退出
+├─ launcher.py  ── port probing (4680, fallback) → uvicorn thread → readiness
+│                  → pywebview (WebView2) window (1280x800)
+│                  → argv[1]=.bsor → POST /api/local/open → navigate to replay
+│                  → window closed → server stops
 │
 ├─ server.py (FastAPI)
-│   ├─ GET /*                   静态资源(SPA fallback → index.html)
-│   ├─ GET /api/source?url=…    官方语义代理(https/≤5跳转/256MB/私网拦截)
-│   ├─ GET /bl/*                [可选] BeatLeader JSON 反代(白名单绕过)
+│   ├─ GET /*                     static assets (SPA fallback → index.html)
+│   ├─ GET /api/source?url=…      upstream-semantics proxy (https/≤5 redirects/256MB/SSRF)
+│   ├─ GET /bl/*                  [optional] BeatLeader JSON reverse proxy
 │   ├─ GET /health
-│   ├─ ── 本地能力 ──
-│   ├─ POST /api/local/open     {path} → {id}   (双击 .bsor)
-│   ├─ GET  /replay/{id}/raw    BSOR 字节流(FileResponse 原样透传)
-│   ├─ GET  /api/maps/{hash}/package   本地谱面 zip;未命中 → BeatSaver 下载缓存
+│   ├─ ── local capabilities ──
+│   ├─ POST /api/local/open       {path} → {id}   (double-click .bsor)
+│   ├─ GET  /replay/{id}/raw      BSOR bytes (FileResponse pass-through)
+│   ├─ GET  /api/maps/{hash}/package    local zip; miss → BeatSaver download + cache
+│   ├─ GET  /api/maps/{hash}/progress   download progress (polled by the UI)
 │   └─ GET  /api/local/stats
 │
-├─ maps/ (resolver 移植, MIT 保留声明)
-│   ├─ compute_level_hash()    SongCore 算法
-│   ├─ SongHashData.dat 解析   优先
-│   └─ CustomLevels 扫描 + JSON 缓存 + mtime 复用 + 扫描锁
+├─ maps/ (resolver port, MIT attribution kept)
+│   ├─ compute_level_hash()    SongCore algorithm
+│   ├─ SongHashData.dat parse  priority
+│   └─ CustomLevels scan + JSON cache + mtime reuse + scan lock
 │
-└─ frontend/  (web/.output/public, Phase 1 静态化产物)
+└─ frontend/  (web/.output/public, Phase 1 static output)
 ```
 
-**数据流(用户双击 MyScore.bsor)**:
+**Data flow (user double-clicks MyScore.bsor)**:
 ```
-Windows 双击 → Local-ChroViewer.exe MyScore.bsor
-  → launcher 起服务器 → POST /api/local/open {path} → {id}
-  → 服务器读 .bsor 前几百字节 → 提取 songHash
-  → resolver: SongHashData.dat → CustomLevels 扫描 → 命中 folder
-  → 窗口导航 ?replayUrl=<enc>/replay/{id}/raw
-  → 前端 fetch /replay/{id}/raw 解析 BSOR → replayMapHash → 本地源 /api/maps/{hash}/package
-  → fflate 解包 → Web Worker 解析 → Three.js 3D 回放(全程零网络)
+Windows double-click → Local-ChroViewer.exe MyScore.bsor
+  → launcher starts server → POST /api/local/open {path} → {id}
+  → server reads the first bytes of the .bsor → extracts songHash
+  → resolver: SongHashData.dat → CustomLevels scan → folder hit
+  → window navigates ?replayUrl=<enc>/replay/{id}/raw
+  → frontend fetches /replay/{id}/raw, parses BSOR → replayMapHash → local
+    source /api/maps/{hash}/package
+  → fflate unpack → Web Worker parse → Three.js 3D replay (zero network)
 ```
 
 ---
 
-## 五、前端改动点(官方 fork 内,最小面)
+## 5. Frontend changes (minimal, inside the upstream fork)
 
-| 文件 | 改动 |
+| File | Change |
 |---|---|
-| `src/sources/local/provider.ts`(新增) | 本地源适配器:请求 `/api/maps/{hash}/package` → 返回 `{key, hash, files}`(后端自动兜底:本地命中→本地 zip;未命中→BeatSaver 下载缓存) |
-| `src/modules/viewer/use-viewer-remote-source.ts` | `resolveLocalFirst`(本地优先,失败回退 BeatSaver 直连);替换全部 5 处找谱面调用(拖入 .bsor / 文件选择 / 分享链接 / SS/BL 在线回放 / 在线搜索) |
+| `src/sources/local/provider.ts` (added) | local source adapter: `/api/maps/{hash}/package` → `{key, hash, files}` (backend auto-fallback: local zip on hit; BeatSaver download+cache on miss) |
+| `src/modules/viewer/use-viewer-remote-source.ts` | `resolveLocalFirst` (local-first, fallback to BeatSaver direct); replaces all 5 map-resolution call sites (drag/pick .bsor, file picker, shared links, SS/BL online replays, online search) |
 
-> 关键洞察:官方代码**已经**支持"拖入 .bsor 无谱面文件 → 按 hash 自动找谱面"的路径,只是它找的是 BeatSaver。本地版只需把"找谱面"这一步的解析器从网络换成"本地优先"。**前端改动 = 2 个文件。**
-
----
-
-## 六、实施记录(全部实测)
-
-### P1 静态化(✅)
-TanStack Start 原生 prerender(`prerender: { enabled: true, filter }`)→ `.output/public/index.html` 7.3KB + 静态资源;Python 静态服务器 + SPA fallback + gzip 预压缩验证通过。
-
-### P2 服务器(✅)
-`server/`(FastAPI):静态服务、`/api/source`、`/health`、`/api/local/open`、`/replay/{id}/raw`、`/api/maps/{hash}/package`、`/api/local/stats`。
-真实环境实测(1031 张本地谱面):路径倒推正确;SongHashData.dat + 计算双通道索引秒建;本地命中 10.7MB zip / 4.4s;未命中 → BeatSaver 下载 8.6MB → `data/map-cache/` 缓存 → 二次 3.6s;replay 字节级一致。
-
-**BSOR 双格式发现**:BeatLeader 0.9.33 的 info 段与标准 BSOR 不同——开头是 `modVersion` 字符串而非 i32,第 10 个字符串才是 mapHash(且 `playerName` 有 UTF-16 长度前缀官方 bug)。`bsor_info.py` 已双格式兼容。
-
-**hash 口径验证**:BeatLeader replay 的 `mapHash` = SongCore 谱面 hash(与 BeatSaver 一致)。旧 replay 与本地当前谱面不一致 = 谱面版本更新,属正常现象,兜底链路覆盖。
-
-### P3 本地窗口(✅)
-`server/launcher.py`:端口 4680+19 顺延、uvicorn 线程、pywebview(WebView2)窗口、`js_api.pick_bsor()` 系统文件对话框兜底、双击 .bsor argv 导航、关窗停服。
-自动化验证(`scripts/tools/webview_test.py`):窗口渲染启动界面 ✅;**`<input type=file>` 弹 Windows 原生文件对话框(过滤 *.dat;*.bsor;*.json)✅**;导航 replayUrl → 地图预览完整渲染(歌曲卡/HUD/时间轴)✅。
-
-### P4 本地优先(✅)
-`fetchLocalMap` + `resolveLocalFirst` 落地,端到端验证:本地 .bsor → `/replay/{id}/raw` → 解析 BSOR → 本地命中 zip → 3D 地图预览渲染,全程零网络。
-
-### P5 打包(✅)
-`scripts/build.py`:PyInstaller 单 exe(windowed,ChroViewer 官方 logo 图标)→ `GitHub_Build/v<version>/Local-ChroViewer-v<version>/` + **Release zip**;自动清理 .work;文件占用重试。frozen 下 `frontend/` 与 `data/` 以 exe 同级为应用根。
-
-### 下载进度反馈(✅ 2026-08-25)
-
-**问题**:本地未命中、后端从 BeatSaver 下载期间(30s+),前端无任何反馈,看起来"卡住"。
-
-**方案**:官方 `ViewerOverlay` 本就带环形进度条(`progress` 参数),但拖入/选择 .bsor 的 file source 路径未接通下载状态。修复:
-- **后端** `server/main.py`:下载进度表 + `GET /api/maps/{hash}/progress`(state/received/total/progress,5 分钟 TTL);下载过程流式统计
-- **前端** `src/sources/local/provider.ts`:`fetchLocalMap` 下载期间轮询 progress 端点(500ms),通过 `onProgress` 上报
-- **前端** `use-viewer-remote-source.ts` / `use-viewer-file-source.ts`:`resolveLocalFirst` 支持 `requestId` → 接通官方 `sourceDownload` 状态;拖入 .bsor 路径现在显示官方 "Downloading map" overlay + 实时进度环
-
-**实测**(测试素材:本地无此 map 的 bsor,15.4MB 下载):
-- 下载中:page state = `"Downloading map"` + overlays:1;截图显示进度环 ~66% 实时填充
-- 后端进度:0 → 2.3% → 19% → 63% → 100%(14s)
-- 下载完成缓存后再次打开:秒进预览(`WACCA ULTRA DREAM MEGAMIX / USAO & Kobaryo`,见 `docs/verification/cached-preview.png`)
+> Key insight: upstream **already** supports "drag a .bsor without map files →
+> resolve the map by hash" — it just resolves via BeatSaver. The local port
+> only swaps that resolver to "local first". **Frontend change = 2 files.**
 
 ---
 
-## 七、分阶段实施计划(最终形态)
+## 6. Implementation record (all verified)
 
-| 阶段 | 内容 | 状态 |
+### P1 Static frontend (✅)
+TanStack Start native prerender (`prerender: { enabled: true, filter }`) →
+`.output/public/index.html` (7.3 KB) + assets; Python static server + SPA
+fallback + gzip precompression verified.
+
+### P2 Server (✅)
+`server/` (FastAPI): static serving, `/api/source`, `/health`,
+`/api/local/open`, `/replay/{id}/raw`, `/api/maps/{hash}/package`,
+`/api/local/stats`.
+Real-environment verification (1031 local maps): path back-derivation correct;
+SongHashData.dat + computed dual-channel index built instantly; local hit
+10.7 MB zip / 4.4 s; miss → BeatSaver download 8.6 MB → `data/map-cache/`
+cache → second request 3.6 s; replay bytes identical.
+
+**BSOR dual-format discovery**: BeatLeader 0.9.33's info section differs from
+standard BSOR — it starts with a `modVersion` string instead of an i32, and
+the mapHash is the 10th string (with the official playerName UTF-16
+length-prefix bug). `bsor_info.py` handles both formats.
+
+**Hash semantics verified**: BeatLeader's `mapHash` = SongCore level hash
+(matches BeatSaver). An old replay's hash differing from the current local map
+means the map was updated — normal, covered by the fallback chain.
+
+### P3 Local window (✅)
+`server/launcher.py`: port 4680+19 fallback, uvicorn thread, pywebview
+(WebView2) window, `js_api.pick_bsor()` system file dialog bridge, double-click
+.bsor argv navigation, stop server on window close.
+Automated verification (`scripts/tools/webview_test.py`): window renders the
+launcher UI ✅; `<input type=file>` opens the native Windows file dialog
+(filter `*.dat;*.bsor;*.json`) ✅; navigation to replayUrl renders the full map
+preview (song card/HUD/timeline) ✅.
+
+### P4 Local-first (✅)
+`fetchLocalMap` + `resolveLocalFirst` shipped; end-to-end: local .bsor →
+`/replay/{id}/raw` → BSOR parse → local zip hit → 3D map preview, zero network.
+
+### P5 Packaging (✅)
+`scripts/build.py`: PyInstaller single exe (windowed, official ChroViewer logo
+icon) → `GitHub_Build/v<version>/Local-ChroViewer-v<version>/` + **release
+zip**; automatic .work cleanup; retry on locked files. Under frozen builds
+`frontend/` and `data/` live next to the exe.
+
+### Download-progress feedback (✅ 2026-08-25)
+
+**Problem**: when a map is missing locally, the backend downloads it from
+BeatSaver (30s+), and the file-source path (drag/pick .bsor) showed no UI
+feedback — it looked frozen.
+
+**Fix** (uses the official ViewerOverlay ring progress):
+- Backend `server/main.py`: download progress table +
+  `GET /api/maps/{hash}/progress` (state/received/total/progress, 5 min TTL),
+  streamed byte counting
+- Frontend `src/sources/local/provider.ts`: poll the progress endpoint (500 ms)
+  during `fetchLocalMap`, report via `onProgress`
+- Frontend `use-viewer-remote-source.ts` / `use-viewer-file-source.ts`:
+  `resolveLocalFirst` accepts `requestId` → wires the official
+  `sourceDownload` state; the drag/pick path now shows "Downloading map" +
+  live progress ring
+
+**Verified** (test replay whose map is absent locally, 15.4 MB download):
+- During download: page state `"Downloading map"`, overlays: 1; screenshot
+  shows the ring ~66% filled
+- Backend progress: 0 → 2.3% → 19% → 63% → 100% (14 s)
+- After caching, reopening renders the map preview instantly
+  (`WACCA ULTRA DREAM MEGAMIX / USAO & Kobaryo`, see
+  `docs/verification/cached-preview.png`)
+
+---
+
+## 7. Phase plan (final form)
+
+| Phase | Content | Status |
 |---|---|---|
-| P0 | 环境就绪(Node/pnpm/Python/WebView2) | ✅ |
-| P1 | 静态化前端(`tanstackStart` 原生 prerender) | ✅ |
-| P2 | Python 服务器 4 能力 + 本地谱面/回放通道 | ✅ |
-| P3 | pywebview 本地窗口 + 端口顺延 + 双击 .bsor | ✅ |
-| P4 | 前端本地源(`resolveLocalFirst` 本地优先) | ✅ |
-| P5 | PyInstaller 打包 + Release zip | ✅ |
-| P6 | 品牌本地化(标题/logo)、社交卡片裁剪、`/bl` 反代、推 GitHub | 待做 |
+| P0 | Environment (Node/pnpm/Python/WebView2) | ✅ |
+| P1 | Static frontend (TanStack Start native prerender) | ✅ |
+| P2 | Python server: 4 base capabilities + local replay/map channels | ✅ |
+| P3 | pywebview window + port fallback + double-click .bsor | ✅ |
+| P4 | Frontend local source (`resolveLocalFirst`, local-first) | ✅ |
+| P5 | PyInstaller packaging + release zip | ✅ |
+| P6 | SaberLab plugin distribution (`saberlab/chro`, GPL-2.0), branding, `/bl` proxy, GitHub release | ✅/pending |
 
 ---
 
-## 八、许可证(红线)
+## 8. SaberLab plugin distribution (saberlab/chro)
 
-- 前端 fork:`GPL-2.0-only`,保留 LICENSE + ATTRIBUTIONS.md(法律义务)
-- `server/` + `launcher/`:全新 Python 代码,GPL-2.0(与前端同仓库同许可)
-- 复用 MIT 上游(BS-Open-Replay / SongCore)代码:保留上游声明,与 GPL-2.0 兼容 ✓
-- 分发:Release zip 内含 LICENSE / README / VERSION.txt
+`saberlab/chro` is a **separate distribution** of this project built as a
+plugin for SaberLab (Beat Saber replay-analysis tool, GPL-3.0-or-later).
+
+**Why it lives here**: ChroViewer is `GPL-2.0-only`, incompatible with
+SaberLab's `GPL-3.0-or-later`. Keeping the ChroViewer-derived code in this
+repository — uniformly licensed **GPL-2.0-only** — avoids the license conflict
+while SaberLab still consumes it as a plugin.
+
+**Modifications vs upstream** (full list in
+`saberlab/chro/MODIFICATIONS.en.md`):
+- `src/sources/saberlab/provider.ts` added: SaberLab local map data source
+  (`/api/maps/{hash}/package`, local-first, remote sources disabled by default)
+- `src/routes/__root.tsx`: RootDocument as a fragment (document structure from
+  index.html) — fixes a selectionchange infinite loop when combining React 19
+  `createRoot(#root)` with `<html>/<head>/<body>` root tags
+- `src/main.tsx`: pure client-side `createRoot(#root)` mount; removed
+  diagnostic heartbeat logging
+- Remote source entry points removed (`/api/source` rewrite, link-loading
+  branch, source-picker link UI) — local-only
+- Orphaned `environment-worker.ts` / `environment-worker-protocol.ts` removed
+- 13 `[saberlab-trace]/[saberlab-exp]` log statements removed (defensive logic
+  kept)
+- `vite.config.ts`: default minify restored; `package.json` renamed
+  `saberlab-chro`
+
+**Build & integration**: `pnpm build` → `dist/`, mounted at `/chro/` by the
+SaberLab backend; SaberLab's replay detail page embeds it in an iframe
+(`/chro/?replayUrl=<origin>/api/replays/{id}/raw`).
 
 ---
 
-## 九、风险与对策
+## 9. License (red lines)
 
-| 风险 | 等级 | 对策 |
+- Frontend fork: **GPL-2.0-only**, LICENSE + ATTRIBUTIONS.md preserved (legal
+  obligation)
+- `server/` + `launcher/`: new Python code, GPL-2.0 (same license as the
+  frontend in one repository)
+- `saberlab/chro` plugin: **GPL-2.0-only**, same as the rest of the project —
+  never merge GPL-3.0 code into it
+- MIT-upstream code reused (BS-Open-Replay / SongCore): keep the upstream
+  notice, GPL-2.0-compatible ✓
+- Distribution: release zip contains LICENSE / README / VERSION.txt
+
+---
+
+## 10. Risks & mitigations
+
+| Risk | Level | Mitigation |
 |---|---|---|
-| BSOR songHash 与本地 hash 口径不一致 | 低 | 两端统一归一化(大写 HEX);未命中回退网络 |
-| CustomLevels 首扫慢 | 中 | SongHashData.dat 优先 + mtime 跳过 + 后台扫描 |
-| `.egg` 加密音频 | 低 | 随包透传,ChroViewer 有降级 |
-| pywebview WebGL2 性能 | 低 | 已实测渲染正常;真机硬件加速验收 |
-| windowed 无控制台错误不可见 | 低 | 日志写 `data/logs/launcher.log`;窗口内错误页 |
-| 打包目录被 exe 占用 | 低 | build.py 重试 + 提示 |
+| BSOR songHash vs local hash mismatch | low | normalize both sides (uppercase HEX); fall back to network |
+| CustomLevels first scan slow | medium | SongHashData.dat priority + mtime skip + background scan |
+| `.egg` encrypted audio | low | pass through in the zip; upstream degrades gracefully |
+| pywebview WebGL2 performance | low | rendering verified; hardware-accelerated acceptance on real hardware |
+| windowed build hides errors | low | logs to `data/logs/launcher.log`; in-window error page |
+| packaged dir locked by a running exe | low | build.py retries + warns |
 
 ---
 
-## 十、结论
+## 11. Conclusion
 
-SaberLab 的实践路线**经代码核实完全可信**。核心价值:
-1. **SongCore hash 算法 + SongHashData.dat 缓存**——"bsor → 本地谱面"反推的关键钥匙
-2. **三个传输坑**(ZIP_STORED / 一次性 Response / windowed stdio)——实战经验直接规避
-3. **前端改动面极小**:`resolveLocalFirst` 一处实现,官方已有的"bsor→按 hash 找谱"路径即从网络转为本地优先
-4. 全部阶段(P1-P5)已落地并实测通过,产物为单 exe + Release zip
+SaberLab's practices were **verified against real code** and are fully
+trustworthy. Core value:
+1. **SongCore hash algorithm + SongHashData.dat cache** — the key to
+   "bsor → local map" resolution
+2. **Three transfer pitfalls** (ZIP_STORED / one-shot Response / windowed
+   stdio) — avoided up front
+3. **Tiny frontend surface**: one `resolveLocalFirst` swaps the upstream
+   "bsor → find map by hash" path from network to local-first
+4. All phases (P1-P5) shipped and verified; output is a single exe + release
+   zip; the SaberLab plugin distribution lives at `saberlab/chro` under the
+   same GPL-2.0-only license
