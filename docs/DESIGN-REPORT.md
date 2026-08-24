@@ -1,20 +1,20 @@
-# Local-ChroViewer 本地版设计报告(基于 saberlab 技术路线验证)
+# Local-ChroViewer 本地版设计报告(基于 SaberLab 实践验证)
 
 > 日期:2026-08-24
-> 输入:① `saberlab-advice.md`(开发建议书)② SaberLab 实际代码逐项核实 ③ 官方 ChroViewer 代码(Phase 1 已验证)
+> 输入:① SaberLab 项目代码逐项核实 ② 官方 ChroViewer 代码(Phase 1 已验证)
 > 目标:exe 双击启动(无控制台窗口)→ 自动弹出本地 webview 窗口;本地 .bsor 直读、按 hash 反推本地谱面、绕过网络
 
 ---
 
-## 一、saberlab-advice.md 可信度验证(全部通过)
+## 一、SaberLab 实践可信度验证(全部通过)
 
-建议书引用的每份资产我都实际读取核实,结论:**内容与 SaberLab 真实代码完全一致,可直接作为实施蓝本**:
+参考的 SaberLab 资产逐项实际读取核实,结论:**内容与真实代码完全一致,可直接作为实施蓝本**:
 
 | 引用资产 | 验证结果 |
 |---|---|
 | `backend/bsor/parser.py` + `models.py` | ✅ 存在。BSOR v1 二进制解析器,严格对齐官方 C# ReplayDecoder(魔数 0x442D3D69、7 种节类型、playerName UTF-16 长度前缀官方 bug 修复) |
 | `backend/maps/resolver.py` | ✅ 存在。`compute_level_hash()` = SongCore 算法;**SHA1(info.dat 字节 + 按 `_difficultyBeatmapSets` 顺序的各难度 .dat 字节) → 大写 HEX**;`load_songcore_cache()` 读游戏自产 `UserData/SongCore/SongHashData.dat` |
-| `backend/main.py` 两个端点 | ✅ 存在且契约与建议书一致:`/api/replays/{id}/raw`(FileResponse 原样透传字节)+ `/api/maps/{hash}/package`(**ZIP_STORED 不压缩** + 一次性 `Response(bytes)` + 500MB 上限 413) |
+| `backend/main.py` 两个端点 | ✅ 存在且契约一致:`/api/replays/{id}/raw`(FileResponse 原样透传字节)+ `/api/maps/{hash}/package`(**ZIP_STORED 不压缩** + 一次性 `Response(bytes)` + 500MB 上限 413) |
 | `backend/host.py` | ✅ 存在。端口探测、uvicorn 线程 + 就绪轮询、窗口失败回退、重启子进程、PyInstaller 用 `app` 对象而非 import string |
 | `packaging/saberlab.spec` | ✅ 存在。PyInstaller onedir;`console=False`(windowed,不弹命令行);`Tree()` 打包前端目录 |
 
@@ -181,7 +181,7 @@ TanStack Start 原生 prerender(`prerender: { enabled: true, filter }`)→ `.out
 
 ## 十、结论
 
-saberlab-advice.md 的技术路线**经代码核实完全可信**。核心价值:
+SaberLab 的实践路线**经代码核实完全可信**。核心价值:
 1. **SongCore hash 算法 + SongHashData.dat 缓存**——"bsor → 本地谱面"反推的关键钥匙
 2. **三个传输坑**(ZIP_STORED / 一次性 Response / windowed stdio)——实战经验直接规避
 3. **前端改动面极小**:`resolveLocalFirst` 一处实现,官方已有的"bsor→按 hash 找谱"路径即从网络转为本地优先
