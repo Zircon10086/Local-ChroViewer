@@ -19,6 +19,10 @@ when the map is missing locally (or its version is outdated) does it download
 from BeatSaver, cache it in the project's own cache area, and show a live
 progress ring while doing so.
 
+<p>
+<img src="Screenshot.png" alt="Local ChroViewer" width="1080">
+</p>
+
 ## Features
 
 - Local `.bsor` replay playback (BeatLeader / ScoreSaber formats), with
