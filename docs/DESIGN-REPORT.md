@@ -141,6 +141,20 @@ TanStack Start 原生 prerender(`prerender: { enabled: true, filter }`)→ `.out
 ### P5 打包(✅)
 `scripts/build.py`:PyInstaller 单 exe(windowed,ChroViewer 官方 logo 图标)→ `GitHub_Build/v<version>/Local-ChroViewer-v<version>/` + **Release zip**;自动清理 .work;文件占用重试。frozen 下 `frontend/` 与 `data/` 以 exe 同级为应用根。
 
+### 下载进度反馈(✅ 2026-08-25)
+
+**问题**:本地未命中、后端从 BeatSaver 下载期间(30s+),前端无任何反馈,看起来"卡住"。
+
+**方案**:官方 `ViewerOverlay` 本就带环形进度条(`progress` 参数),但拖入/选择 .bsor 的 file source 路径未接通下载状态。修复:
+- **后端** `server/main.py`:下载进度表 + `GET /api/maps/{hash}/progress`(state/received/total/progress,5 分钟 TTL);下载过程流式统计
+- **前端** `src/sources/local/provider.ts`:`fetchLocalMap` 下载期间轮询 progress 端点(500ms),通过 `onProgress` 上报
+- **前端** `use-viewer-remote-source.ts` / `use-viewer-file-source.ts`:`resolveLocalFirst` 支持 `requestId` → 接通官方 `sourceDownload` 状态;拖入 .bsor 路径现在显示官方 "Downloading map" overlay + 实时进度环
+
+**实测**(测试素材:本地无此 map 的 bsor,15.4MB 下载):
+- 下载中:page state = `"Downloading map"` + overlays:1;截图显示进度环 ~66% 实时填充
+- 后端进度:0 → 2.3% → 19% → 63% → 100%(14s)
+- 下载完成缓存后再次打开:秒进预览(`WACCA ULTRA DREAM MEGAMIX / USAO & Kobaryo`,见 `docs/verification/cached-preview.png`)
+
 ---
 
 ## 七、分阶段实施计划(最终形态)

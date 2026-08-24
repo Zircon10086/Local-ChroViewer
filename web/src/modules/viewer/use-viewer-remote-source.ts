@@ -64,14 +64,17 @@ function sourceDownloadUrl(value: string) {
 /**
  * 本地优先,云端兜底:先请求本地后端(本地 CustomLevels 命中 → 本地 zip;
  * 未命中 → 后端自动从 BeatSaver 下载并缓存),失败再回退官方 BeatSaver 直连。
+ * 传入 requestId 时接通官方 sourceDownload 状态(拖入 .bsor 等 file source 路径)。
  */
 async function resolveLocalFirst(
   hash: string,
-  options: LocalMapResolveOptions = {},
+  options: LocalMapResolveOptions & { requestId?: number } = {},
 ): Promise<SourceResult<BeatSaverMapSource>> {
-  const local = await fetchLocalMap(hash, options);
+  const { requestId, ...rest } = options;
+  const download = requestId === undefined ? rest : downloadOptions('beatsaver', requestId);
+  const local = await fetchLocalMap(hash, download);
   if (local.isOk()) return local;
-  return fetchBeatSaverHash(hash, options);
+  return fetchBeatSaverHash(hash, download);
 }
 
 interface UseViewerRemoteSourceOptions {

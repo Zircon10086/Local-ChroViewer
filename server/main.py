@@ -24,6 +24,7 @@ import os
 import pathlib
 import socket
 import sys
+import time
 import urllib.parse
 import zipfile
 from typing import Optional
@@ -172,30 +173,77 @@ async def _download_map_to_cache(song_hash: str) -> pathlib.Path:
     if cache_path.exists():
         return cache_path
     MAP_CACHE_DIR.mkdir(parents=True, exist_ok=True)
-    async with httpx.AsyncClient(timeout=180.0, follow_redirects=True) as client:
-        meta = await client.get(f"https://api.beatsaver.com/maps/hash/{song_hash.lower()}")
-        if meta.status_code != 200:
-            raise HTTPException(502, f"BeatSaver lookup failed ({meta.status_code})")
-        data = meta.json()
-        versions = data.get("versions") or []
-        if not versions:
-            raise HTTPException(404, "BeatSaver has no versions for this hash")
-        download_url = versions[0].get("downloadURL")
-        if not download_url:
-            raise HTTPException(502, "BeatSaver version missing downloadURL")
-        tmp = cache_path.with_suffix(".part")
-        try:
-            with open(tmp, "wb") as f:
-                async with client.stream("GET", download_url) as resp:
-                    if resp.status_code != 200:
-                        raise HTTPException(502, f"BeatSaver download failed ({resp.status_code})")
-                    async for chunk in resp.aiter_bytes():
-                        f.write(chunk)
-            tmp.replace(cache_path)
-        except Exception:
-            tmp.unlink(missing_ok=True)
-            raise
+    _set_download_progress(song_hash, "downloading", 0, None)
+    try:
+        async with httpx.AsyncClient(timeout=180.0, follow_redirects=True) as client:
+            meta = await client.get(f"https://api.beatsaver.com/maps/hash/{song_hash.lower()}")
+            if meta.status_code != 200:
+                raise HTTPException(502, f"BeatSaver lookup failed ({meta.status_code})")
+            data = meta.json()
+            versions = data.get("versions") or []
+            if not versions:
+                raise HTTPException(404, "BeatSaver has no versions for this hash")
+            download_url = versions[0].get("downloadURL")
+            if not download_url:
+                raise HTTPException(502, "BeatSaver version missing downloadURL")
+            tmp = cache_path.with_suffix(".part")
+            try:
+                with open(tmp, "wb") as f:
+                    async with client.stream("GET", download_url) as resp:
+                        if resp.status_code != 200:
+                            raise HTTPException(502, f"BeatSaver download failed ({resp.status_code})")
+                        total = int(resp.headers.get("content-length") or 0) or None
+                        _set_download_progress(song_hash, "downloading", 0, total)
+                        received = 0
+                        async for chunk in resp.aiter_bytes():
+                            f.write(chunk)
+                            received += len(chunk)
+                            _set_download_progress(song_hash, "downloading", received, total)
+                tmp.replace(cache_path)
+            except Exception:
+                tmp.unlink(missing_ok=True)
+                _set_download_progress(song_hash, "error", 0, None)
+                raise
+    except Exception:
+        _set_download_progress(song_hash, "error", 0, None)
+        raise
+    _set_download_progress(song_hash, "ready", None, None)
     return cache_path
+
+
+_download_progress: dict[str, dict] = {}  # hash -> {state, received, total, progress, updated_at}
+_PROGRESS_TTL = 300.0  # 状态保留 5 分钟
+
+
+def _set_download_progress(song_hash: str, state: str, received: int | None, total: int | None) -> None:
+    progress = None
+    if state == "downloading" and received is not None and total:
+        progress = min(received / total, 1.0)
+    elif state == "ready":
+        progress = 1.0
+    _download_progress[song_hash] = {
+        "state": state,
+        "received": received,
+        "total": total,
+        "progress": progress,
+        "updated_at": time.time(),
+    }
+
+
+def _prune_download_progress() -> None:
+    cutoff = time.time() - _PROGRESS_TTL
+    for h in [h for h, v in _download_progress.items() if v["updated_at"] < cutoff]:
+        _download_progress.pop(h, None)
+
+
+@app.get("/api/maps/{song_hash}/progress")
+def api_map_progress(song_hash: str):
+    """谱面下载进度(供前端轮询):{state: downloading|ready|error|unknown, progress}"""
+    _prune_download_progress()
+    info = _download_progress.get(song_hash.strip().upper())
+    if info is None:
+        return {"state": "unknown", "progress": None}
+    return {k: info[k] for k in ("state", "received", "total", "progress")}
 
 
 @app.get("/api/maps/{song_hash}/package")
@@ -211,7 +259,6 @@ async def api_map_package(song_hash: str):
             return Response(_zip_map_folder(folder), media_type="application/zip",
                             headers={"content-disposition": "attachment; filename=map.zip",
                                      "x-map-source": "local"})
-
     # 未命中本地 → BeatSaver 下载并缓存到项目缓存区
     cache_path = await _download_map_to_cache(song_hash)
     return FileResponse(cache_path, media_type="application/zip",

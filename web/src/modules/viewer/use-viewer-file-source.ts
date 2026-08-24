@@ -229,7 +229,7 @@ export function useViewerFileSource({
 
   async function loadFiles(
     files: File[],
-    resolveReplayMap: (hash: string) => Promise<SourceResult<BeatSaverMapSource>>,
+    resolveReplayMap: (hash: string, options?: { requestId?: number }) => Promise<SourceResult<BeatSaverMapSource>>,
   ) {
     const requestId = beginSourceRequest();
     const result = await Result.gen(async function* () {
@@ -301,7 +301,7 @@ export function useViewerFileSource({
             }),
           );
         }
-        const source = yield* Result.await(resolveReplayMap(hash));
+        const source = yield* Result.await(resolveReplayMap(hash, { requestId }));
         if (!isSourceRequestCurrent(requestId)) return Result.ok(undefined);
         sourceFiles.push(...source.files);
         identity = { key: source.key, hash: source.hash };

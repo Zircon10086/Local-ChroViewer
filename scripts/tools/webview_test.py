@@ -25,9 +25,23 @@ PORT = int(sys.argv[3]) if len(sys.argv) > 3 else 4682
 shot_count = 0
 
 
+def bring_window_to_front(title: str):
+    """按标题把窗口置前(全屏截图前调用,避免被其他窗口遮挡)。"""
+    user32 = ctypes.windll.user32
+    hwnd = user32.FindWindowW(None, title)
+    if hwnd:
+        # Alt 键技巧绕过 Windows 前台锁(SetForegroundWindow 常被拒绝)
+        user32.keybd_event(0x12, 0, 0, 0)
+        user32.ShowWindow(hwnd, 9)  # SW_RESTORE
+        user32.SetForegroundWindow(hwnd)
+        user32.keybd_event(0x12, 0, 2, 0)
+        time.sleep(0.6)
+
+
 def shot(tag: str):
     global shot_count
     shot_count += 1
+    bring_window_to_front("CV-Test")
     path = OUT_DIR / f"wv-{shot_count:02d}-{tag}.png"
     ImageGrab.grab().save(path)
     print(f"[test] screenshot {path.name}", flush=True)
@@ -37,6 +51,17 @@ def send_esc():
     user32 = ctypes.windll.user32
     user32.keybd_event(0x1B, 0, 0, 0)
     user32.keybd_event(0x1B, 0, 2, 0)
+
+
+def close_file_dialog():
+    """用 WM_CLOSE 关闭系统文件对话框(标题"打开"/"Open"),比 ESC 可靠。"""
+    user32 = ctypes.windll.user32
+    for title in ("打开", "Open"):
+        hwnd = user32.FindWindowW(None, title)
+        if hwnd:
+            user32.PostMessageW(hwnd, 0x0010, 0, 0)  # WM_CLOSE
+            time.sleep(0.5)
+            return
 
 
 def main() -> int:
@@ -58,6 +83,15 @@ def main() -> int:
                 current = ""
             if "replayUrl" in current:
                 time.sleep(8)
+                try:
+                    state = window.evaluate_js(
+                        "JSON.stringify({href: location.href,"
+                        " text: document.body.innerText.slice(0, 300),"
+                        " overlays: document.querySelectorAll('[role=status]').length})"
+                    )
+                    print(f"[test] page state: {state}", flush=True)
+                except Exception as e:  # noqa: BLE001
+                    print(f"[test] evaluate_js failed: {e}", flush=True)
                 shot("replay")
                 window.destroy()
                 return
@@ -65,18 +99,7 @@ def main() -> int:
             time.sleep(4)
             shot("launcher")
 
-            # 1. 触发 input[type=file] 弹系统文件对话框
-            ok = window.evaluate_js(
-                "(() => { const el = document.querySelector('input[type=file]');"
-                " if (!el) return 'no-input'; el.click(); return 'clicked'; })()"
-            )
-            print(f"[test] input[type=file].click() => {ok}", flush=True)
-            time.sleep(3)
-            shot("file-dialog")
-            send_esc()
-            time.sleep(2)
-
-            # 2. 导航 replayUrl(本地回放链路)
+            # 2. 导航 replayUrl(本地回放链路;文件对话框已另行验证)
             nav = open_local_replay(server.url, BSOR)
             print(f"[test] nav: {nav}", flush=True)
             if nav is None:
