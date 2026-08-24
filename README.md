@@ -1,6 +1,10 @@
+<div align="center">
+
 <p>
 <a href="README.zh.md">中文</a> · <a href="README.md">English</a>
 </p>
+
+<div align="left">
 
 # Local-ChroViewer
 
