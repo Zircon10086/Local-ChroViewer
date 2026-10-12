@@ -7,7 +7,7 @@
 用法:
     python scripts/build.py                    # 全量打包
     python scripts/build.py --skip-frontend    # 跳过前端产物检查
-    python scripts/build.py --version 1.0.0    # 指定版本(默认 1.0.0)
+    python scripts/build.py --version 1.2.0    # 指定版本(默认 1.2.0)
 """
 from __future__ import annotations
 
@@ -22,7 +22,7 @@ PROJECT_ROOT = pathlib.Path(__file__).resolve().parent.parent
 WEB_DIR = PROJECT_ROOT / "web"
 DIST_DIR_DEFAULT = PROJECT_ROOT / "web" / ".output" / "public"
 GITHUB_BUILD = PROJECT_ROOT / "GitHub_Build"
-VERSION = "1.0.0"
+VERSION = "1.2.0"
 
 ENTRY = str(PROJECT_ROOT / "launcher" / "entry_webview.py")
 NAME = "Local-ChroViewer"
@@ -145,7 +145,7 @@ def rm_rf(path: pathlib.Path) -> None:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Local-ChroViewer build script")
-    parser.add_argument("--version", default=VERSION, help="版本号(默认 1.0.0)")
+    parser.add_argument("--version", default=VERSION, help="版本号(默认 1.2.0)")
     parser.add_argument("--skip-frontend", action="store_true", help="跳过前端产物检查")
     parser.add_argument("--rebuild-frontend", action="store_true", help="强制重建前端")
     args = parser.parse_args()

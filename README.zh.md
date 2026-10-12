@@ -29,6 +29,13 @@ Beat Saber 谱面/回放本地查看器 —— [ChroViewer](https://github.com/U
   界面显示下载进度
 - 端口 4680 起,被占用自动顺延(4681..4699)
 - 双击 .bsor 直接打开(`Local-ChroViewer.exe "x.bsor"`)
+- 官方曲目(OST/DLC)回放:回放没有自定义谱面哈希时以关卡 ID 作为身份,
+  游戏自带曲目同样可播放
+- 缺失谱面自动补全(v1.2.0):宿主后端提供
+  `POST /api/maps/{id}/ensure-preview` 时,由宿主补全缺失谱面后自动取回;
+  普通 ChroViewer 后端没有该端点,行为退回原来的「谱面未找到」
+- 宿主暂停契约(v1.2.0):嵌入方(SaberLab)用一条 `saberlab:playback`
+  消息即可暂停已离开当前画面的回放——只暂停、保留播放位置、不自动续播
 
 ## 目录结构
 
@@ -38,7 +45,6 @@ Beat Saber 谱面/回放本地查看器 —— [ChroViewer](https://github.com/U
 ├── launcher/            打包入口(pywebview 窗口)
 ├── scripts/             build.py(PyInstaller → GitHub_Build/v<version>/)、验证工具
 ├── saberlab/chro/       SaberLab 插件分发物(GPL-2.0,见下)
-├── docs/                分析与设计报告(英文)
 └── GitHub_Build/        打包输出(已 gitignore)
 ```
 
@@ -61,7 +67,7 @@ python -m server.launcher "xxx.bsor"     rem 直接打开回放
 
 ```bat
 python -m pip install -r server\requirements-dev.txt
-python scripts\build.py                  rem 输出到 GitHub_Build\v1.0.0\
+python scripts\build.py --version 1.2.0  rem 输出到 GitHub_Build\v1.2.0\
 ```
 
 产物(`GitHub_Build\v<version>\`,windowed,双击不弹命令行):
@@ -79,7 +85,9 @@ pnpm exec vp build        rem 产出 .output/public(静态化预渲染)
 
 相对上游(commit `dd01022`)的本地化改动:
 
-- `src/sources/local/provider.ts`(新增):本地源适配器
+- `src/sources/local/provider.ts`(新增):本地源适配器、关卡 ID 身份、宿主补全谱面(`ensure-preview`)
+- `src/core/replay/types.ts`:`replayMapHash` 回退到关卡 ID
+- `src/modules/viewer/use-host-playback-commands.ts`(新增):宿主暂停契约,由 `viewer-shell.tsx` 挂载
 - `src/modules/viewer/use-viewer-remote-source.ts`:`resolveLocalFirst`(本地优先)+ 下载进度接通
 - `vite.config.ts`:TanStack Start 原生 prerender(`/`)
 
@@ -97,6 +105,12 @@ pnpm exec vp build        rem 产出 .output/public(静态化预渲染)
   (本地 map 源、纯客户端挂载、移除远程入口等)
 - 该目录是静态构建产物(前端 dist);SaberLab 挂载在 `/chro/` 下,
   以 iframe 方式嵌入(`/chro/?replayUrl=<origin>/api/replays/{id}/raw`)
+- 发布的 `Local-ChroViewer-saberlab-plugin-v<version>.zip` 取自 SaberLab 在用的
+  `plugins/chro`:同一份负载,但 `index.html` 注入了宿主桥,并附带
+  `inject_saberlab_bridge.py`(替换文件后重新注桥用)。本目录与
+  `plugins/chro` 的负载文件字节一致
+- 该 dist 早于 TanStack Start 构建,目前无法从 `web/` 重新生成;它携带的关卡 ID
+  补丁由 SaberLab 的 `_tools/patch_chro_official_replays.py` 幂等施加(`--check` 可校验)
 
 ## 许可证
 
