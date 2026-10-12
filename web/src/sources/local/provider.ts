@@ -50,12 +50,63 @@ function pollLocalMapProgress(
   };
 }
 
+/**
+ * Ask the backend to complete a level it does not have, then wait a little for it.
+ *
+ * A local-first backend (SaberLab) can fetch a missing level on its own — the player's deleted
+ * custom map comes back from BeatSaver, a game level from the community archive of the game's
+ * own levels. It exposes that as `POST /api/maps/{id}/ensure-preview`; the answer is immediate,
+ * so this probes for the package afterwards instead of trusting a single status.
+ *
+ * Responds silently when the backend does not offer the endpoint (a plain ChroViewer server):
+ * the caller then reports the original "map not found", which is the correct answer there.
+ * Paid DLC levels are not distributed anywhere and keep failing — that is the backend's answer
+ * to give, and it is not this function's job to hide it.
+ */
+async function requestMissingMapFill(hash: string, request: FetchRequest, signal?: AbortSignal): Promise<boolean> {
+  try {
+    const response = await request(`/api/maps/${encodeURIComponent(hash)}/ensure-preview`, {
+      method: 'POST',
+      signal,
+    });
+    if (!response.ok) return false;
+    const info = (await response.json()) as { status?: string; reason?: string };
+    return info.status === 'ok';
+  } catch {
+    return false;
+  }
+}
+
+/** Poll the package endpoint until it answers, or give up. Returns whether it arrived. */
+async function waitForFilledMap(
+  hash: string,
+  request: FetchRequest,
+  attempts: number,
+  signal?: AbortSignal,
+): Promise<boolean> {
+  for (let i = 0; i < attempts; i += 1) {
+    if (signal?.aborted) return false;
+    await new Promise((resolve) => window.setTimeout(resolve, 1000));
+    try {
+      const response = await request(`/api/maps/${encodeURIComponent(hash)}/package`, { signal });
+      if (response.ok) return true;
+    } catch {
+      // keep waiting: a fetch that has not finished downloading yet is the normal case here
+    }
+  }
+  return false;
+}
+
 export async function fetchLocalMap(
   hash: string,
   options: LocalMapResolveOptions = {},
 ): Promise<SourceResult<BeatSaverMapSource>> {
-  const normalized = hash.trim().toLowerCase();
-  if (!/^[0-9a-f]{40}$/.test(normalized)) {
+  // The identity is a custom level's 40-hex hash or, for a game level (OST/DLC), its level id
+  // (`custom_level_SPINETERNALLY` in a replay, stored by the backend under the bare id). Both
+  // are asked for the same way; the case is left as it arrived, because a level id is not
+  // case-insensitive by definition — a local-first backend looks it up itself.
+  const normalized = hash.trim().replace(/^custom_level_/i, '');
+  if (!/^([0-9a-f]{40}|[0-9a-z]+)$/i.test(normalized)) {
     return Result.err(
       new SourceError({
         message: 'invalid map hash',
@@ -72,16 +123,18 @@ export async function fetchLocalMap(
       : pollLocalMapProgress(normalized, options.onProgress, request, options.signal);
 
   try {
-    const data = await Result.tryPromise({
-      try: () =>
-        requestArrayBuffer(`/api/maps/${normalized}/package`, {
-          source: 'local',
-          label: `Local map ${normalized}`,
-          operation: 'download-local-map',
-          onProgress: options.onProgress,
-          request,
-          signal: options.signal,
-        }),
+    const download = () =>
+      requestArrayBuffer(`/api/maps/${normalized}/package`, {
+        source: 'local',
+        label: `Local map ${normalized}`,
+        operation: 'download-local-map',
+        onProgress: options.onProgress,
+        request,
+        signal: options.signal,
+      });
+
+    let data = await Result.tryPromise({
+      try: download,
       catch: (cause) =>
         sourceError(cause, {
           message: cause instanceof Error ? cause.message : 'local map could not be loaded',
@@ -90,6 +143,23 @@ export async function fetchLocalMap(
         }),
     });
     if (data.isErr()) return data;
+    // Missing here: let the backend complete the level (the feature SaberLab calls
+    // "补全丢失谱面"), then download it for real. One round is enough — the loop lives in the
+    // backend task, and a second attempt here would only duplicate it.
+    if (data.value.isErr() && (await requestMissingMapFill(normalized, request, options.signal))) {
+      if (await waitForFilledMap(normalized, request, 60, options.signal)) {
+        data = await Result.tryPromise({
+          try: download,
+          catch: (cause) =>
+            sourceError(cause, {
+              message: cause instanceof Error ? cause.message : 'local map could not be loaded',
+              source: 'local',
+              operation: 'download-local-map',
+            }),
+        });
+        if (data.isErr()) return data;
+      }
+    }
     if (data.value.isErr()) return data.value;
 
     const files = await extractMapArchive(new Uint8Array(data.value.value));

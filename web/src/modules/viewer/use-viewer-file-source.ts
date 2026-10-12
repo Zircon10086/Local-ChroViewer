@@ -291,8 +291,10 @@ export function useViewerFileSource({
         } else sourceFiles.push(file);
       }
       if (replay !== null && sourceFiles.length === 0) {
+        // The identity is always available now (a game level contributes its level id), so an
+        // empty one is the only way this can be missing.
         const hash = replayMapHash(replay);
-        if (hash === null) {
+        if (hash === '') {
           return Result.err(
             new SourceError({
               message: t('errors.replayMissingHash'),

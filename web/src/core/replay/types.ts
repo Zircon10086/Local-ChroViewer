@@ -189,6 +189,19 @@ export interface Replay {
   legacyScoreSaber?: LegacyScoreSaberData;
 }
 
+/**
+ * The level identity a replay refers to: the 40-hex hash of a custom level when it has one,
+ * otherwise the level id itself with the `custom_level_` prefix removed.
+ *
+ * Why the fallback exists: a replay of a game level (OST/DLC) carries an id like
+ * `custom_level_SPINETERNALLY` and has no custom hash at all. Returning null for those used to
+ * make the viewer refuse the replay outright ("replay is missing a custom map hash"), so the
+ * game's own levels could never be replayed. The bare level id is exactly the key a local-first
+ * backend such as SaberLab uses (`/api/maps/{id}/package`, where such levels are stored under
+ * their level id), which is what makes the fallback useful rather than merely less loud.
+ */
 export function replayMapHash(replay: Replay) {
-  return /([0-9a-f]{40})$/i.exec(replay.metadata.levelId)?.[1]?.toUpperCase() ?? null;
+  return (
+    /([0-9a-f]{40})$/i.exec(replay.metadata.levelId)?.[1] ?? replay.metadata.levelId.replace(/^custom_level_/i, '')
+  ).toUpperCase();
 }

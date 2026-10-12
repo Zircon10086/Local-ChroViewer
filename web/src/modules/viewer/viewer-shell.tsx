@@ -40,6 +40,7 @@ import { ViewerActions } from './components/viewer-actions';
 import { ViewerOverlay } from './components/viewer-overlay';
 import { buildTimelineMarkers } from './timeline-markers';
 import { TransportControls } from './transport/transport-controls';
+import { useHostPlaybackCommands } from './use-host-playback-commands';
 import { useSongTransport } from './use-song-transport';
 import { useViewerControls } from './use-viewer-controls';
 import { useViewerSession } from './use-viewer-session';
@@ -89,6 +90,12 @@ export function ViewerShell() {
     lightshowModeRef,
     settings,
     settingsRef,
+  });
+  // Live/watch-party runtimes own the transport themselves; the host pause/resume
+  // contract only applies to the plain replay view.
+  useHostPlaybackCommands({
+    disabled: search.party !== undefined || search.playerId !== undefined,
+    transport,
   });
   const [activePanel, setActivePanel] = useState<ViewerPanel>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);

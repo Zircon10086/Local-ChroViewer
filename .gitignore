@@ -28,3 +28,6 @@ scripts/tools/
 .idea/
 Thumbs.db
 Desktop.ini
+
+# Patch backups left by consumers of the built bundle
+*.orig

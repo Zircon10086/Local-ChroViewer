@@ -30,6 +30,7 @@ import {
 } from '../../sources/scoresaber/provider';
 import { isViewerSourceEnabled } from '../../sources/source-config';
 import { SourceError } from '../../sources/source-error';
+import type { BeatSaverMapSource } from '../../sources/source-types';
 import type {
   BeatLeaderLeaderboard,
   DownloadProgress,
@@ -64,17 +65,24 @@ function sourceDownloadUrl(value: string) {
 /**
  * 本地优先,云端兜底:先请求本地后端(本地 CustomLevels 命中 → 本地 zip;
  * 未命中 → 后端自动从 BeatSaver 下载并缓存),失败再回退官方 BeatSaver 直连。
- * 传入 requestId 时接通官方 sourceDownload 状态(拖入 .bsor 等 file source 路径)。
+ *
+ * 下载选项两种形态都要能接:`loadSource` 内部直接传 hook 自己的 `downloadOptions(...)`
+ * (进度与 `sourceDownload` 状态由它驱动);`resolveReplayMap` 的调用方(file source 路径)
+ * 只传 `requestId`。模块级函数拿不到 hook 闭包里的 `downloadOptions`,此前直接调用它,
+ * 类型检查一直报 TS2304/TS6192(构建不做类型检查,所以没暴露)。
  */
 async function resolveLocalFirst(
   hash: string,
-  options: LocalMapResolveOptions & { requestId?: number } = {},
+  download?: LocalMapResolveOptions & { requestId?: number },
 ): Promise<SourceResult<BeatSaverMapSource>> {
-  const { requestId, ...rest } = options;
-  const download = requestId === undefined ? rest : downloadOptions('beatsaver', requestId);
-  const local = await fetchLocalMap(hash, download);
+  const options: LocalMapResolveOptions = {
+    onProgress: download?.onProgress,
+    request: download?.request,
+    signal: download?.signal,
+  };
+  const local = await fetchLocalMap(hash, options);
   if (local.isOk()) return local;
-  return fetchBeatSaverHash(hash, download);
+  return fetchBeatSaverHash(hash, options);
 }
 
 interface UseViewerRemoteSourceOptions {
@@ -171,7 +179,7 @@ export function useViewerRemoteSource({
       if (!isSourceRequestCurrent(requestId)) return Result.ok(undefined);
       applyLegacyScoreSaberMetadata(replay, source);
       const replayHash = replayMapHash(replay);
-      if (replayHash?.toLowerCase() !== source.hash.toLowerCase()) {
+      if (replayHash.toLowerCase() !== source.hash.toLowerCase()) {
         return Result.err(
           new SourceError({
             message: t('errors.replayMapMismatch'),
@@ -227,7 +235,7 @@ export function useViewerRemoteSource({
       if (!isSourceRequestCurrent(requestId)) return Result.ok(undefined);
 
       const replayHash = replayMapHash(replay);
-      if (replayHash?.toLowerCase() !== source.hash.toLowerCase()) {
+      if (replayHash.toLowerCase() !== source.hash.toLowerCase()) {
         return Result.err(
           new SourceError({
             message: t('errors.beatleaderReplayMapMismatch'),
@@ -259,7 +267,7 @@ export function useViewerRemoteSource({
       const replay = yield* Result.await(parseReplay(data));
       if (!isSourceRequestCurrent(requestId)) return Result.ok(undefined);
       const hash = replayMapHash(replay);
-      if (hash === null) {
+      if (hash === '') {
         return Result.err(
           new SourceError({
             message: t('errors.replayMissingHash'),
